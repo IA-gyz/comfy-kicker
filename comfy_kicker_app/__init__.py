@@ -1,0 +1,1 @@
+"""Modular Comfy Kicker application."""
