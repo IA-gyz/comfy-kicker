@@ -43,6 +43,11 @@ The selected device is isolated for the ComfyUI process with
 The `--cuda-device` option is hidden from the launcher. If no CUDA device can
 be detected, no selection is forced and ComfyUI retains its normal default.
 
+Known cards get a product photo next to their name in both GPU pickers
+(matched on vendor/model in `GPU_IMAGES` in `common.py`; photos live in
+`comfy_kicker_app/assets/`): the ASUS card photo is the RTX 3090, the PNY
+photo is the RTX 4070 Ti Super.
+
 ## Second session (other GPU)
 
 The **Second session (other GPU)** section starts a second ComfyUI process from

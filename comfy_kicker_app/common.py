@@ -44,6 +44,21 @@ FAVORITES = [
 # Flags that make no sense from a launcher (they print and exit, or are build-specific).
 HIDDEN = {"--quick-test-for-ci", "--windows-standalone-build", "--list-feature-flags", "--cuda-device"}
 
+ASSETS = Path(__file__).resolve().parent / "assets"
+# Product photos shown next to a GPU wherever its name is displayed (vendor or model match).
+GPU_IMAGES = [
+    (re.compile(r"asus|rog|3090", re.I), "asus.png"),   # the RTX 3090 card
+    (re.compile(r"pny|4070", re.I), "pny.png"),         # the RTX 4070 Ti Super card
+]
+
+def gpu_image(name):
+    """Product photo for a detected GPU name, or None when no image matches."""
+    for rx, file in GPU_IMAGES:
+        if rx.search(name or ""):
+            path = ASSETS / file
+            return path if path.is_file() else None
+    return None
+
 # Log colouring: first matching rule wins per fragment; the most severe category (lowest rank) wins per line.
 LOG_RULES = [
     ("error", re.compile(r"error|critical|fatal|traceback|exception|failed|out of memory|exited \(code (?!0\))", re.I)),

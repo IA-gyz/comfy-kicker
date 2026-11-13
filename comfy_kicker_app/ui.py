@@ -1164,6 +1164,12 @@ class Kicker(QMainWindow):
             )
             group.addButton(radio, index)
             layout.addWidget(radio)
+            img = gpu_image(device["name"])
+            if img is not None:
+                icon = QIcon(str(img))
+                if not icon.isNull():
+                    radio.setIcon(icon)
+                    radio.setIconSize(QSize(64, 22))  # wide product photo beside the name
             radio.toggled.connect(lambda checked, idx=index: on_select(idx, checked))
             if index == selected:
                 radio.setChecked(True)
