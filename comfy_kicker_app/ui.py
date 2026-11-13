@@ -2,6 +2,7 @@
 from .common import *
 from .launcher import *
 from .monitor import FLAG_GUIDANCE, TtcPanel, WorkflowPanel
+from .session import ComfySession
 
 def detailed_flag_tooltip(spec):
     flag = spec.get("flag", "")
@@ -220,6 +221,139 @@ class CollapsibleSection(QFrame):
         self.updateGeometry()
 
 
+class LogPane(QWidget):
+    """One session's log view: ANSI-stripped colouring, per-line filter bits, auto-scroll."""
+
+    def __init__(self):
+        super().__init__()
+        self.view = QPlainTextEdit()
+        self.view.setReadOnly(True)
+        self.view.setMaximumBlockCount(5000)
+        self.view.setStyleSheet("font-family: monospace; font-size: 11px;")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self.view)
+        self._fmts = self._make_formats()
+        self._cat, self._line, self._bol, self._in_tb = None, "", True, False  # log colouring state
+        self._cr, self._esc = False, ""  # carriage-return overwrite flag, partial ANSI escape code
+        self._gen_times = []  # generation run times for the summary line
+        self.filter_mask, self.filter_classified_only = 0, False  # active bits; all boxes means classified-only mode
+        self.auto_scroll = True
+
+    def log(self, text):
+        """Append to the log; a bare \\r (tqdm progress) overwrites the current line."""
+        text = self._esc + text  # an escape code may arrive split across two reads
+        m = re.search(r"\x1b(\[[0-9;?]*[ -/]*)?$", text)
+        self._esc, text = (text[m.start():], text[:m.start()]) if m else ("", text)
+        text = ANSI_RE.sub("", text)
+        extra = []  # summary lines to add once this chunk is fully written
+        sb = self.view.verticalScrollBar()
+        follow = self.auto_scroll  # explicit toggle controls whether new output moves the view
+        cur = QTextCursor(self.view.document())  # private cursor: leaves the user's selection alone
+        cur.movePosition(QTextCursor.MoveOperation.End)
+        for tok in re.split(r"(\r\n|\r|\n)", text):
+            if tok == "\r":
+                self._cr = True
+            elif tok in ("\n", "\r\n"):
+                done = GEN_TIME_RE.search(self._line)
+                cur.insertText("\n")
+                self._cr, self._bol, self._cat, self._line = False, True, None, ""
+                self._place(cur.block(), 0)  # fresh empty line: hidden while a filter is active
+                if done:
+                    extra.append(self._gen_summary(float(done.group(1))))
+            elif tok:
+                if self._cr:
+                    cur.movePosition(QTextCursor.MoveOperation.StartOfBlock, QTextCursor.MoveMode.KeepAnchor)
+                    cur.removeSelectedText()
+                    self._cr, self._bol, self._cat, self._line = False, True, None, ""
+                earlier = bool(self._line)
+                self._line += tok
+                cat = self._classify(tok)
+                changed = bool(cat) and (self._cat is None or LOG_RANK[cat] < LOG_RANK[self._cat])
+                if changed:
+                    self._cat = cat
+                # A new/unknown colour category must never interrupt log ingestion.
+                cur.insertText(tok, self._fmts.get(self._cat, self._fmts[None]))
+                if changed and earlier:  # category only became clear mid-line: recolour the whole line
+                    cur.movePosition(QTextCursor.MoveOperation.StartOfBlock, QTextCursor.MoveMode.KeepAnchor)
+                    cur.setCharFormat(self._fmts[self._cat])
+                    cur.movePosition(QTextCursor.MoveOperation.End)
+                self._bol = False
+                self._place(cur.block(), sum(bit for bit, _, rx in FILTER_RULES if rx.search(self._line) or (bit == 8 and self._cat in ("error", "tb"))))
+        if follow:
+            sb.setValue(sb.maximum())
+        for line in extra:
+            self.log(line)
+
+    def _make_formats(self):
+        """Per-category text formats; pastel colours on dark themes, deeper ones on light."""
+        dark = self.view.palette().base().color().lightness() < 128
+        spec = {  # category: (dark-theme colour, light-theme colour, bold)
+            "error": ("#ff6b6b", "#c0392b", True), "tb": ("#d98a8a", "#a5524a", False),
+            "warn": ("#f5c04a", "#b9770e", False), "success": ("#6bcf7f", "#1e8449", False),
+            "info": ("#6cb6ff", "#1f6fb2", False), "progress": ("#5fb3b3", "#148f8f", False),
+            "rate": ("#5fb3b3", "#148f8f", False),
+            "workflow_eta": ("#c792ea", "#8e44ad", True),
+            "debug": ("#8a8f98", "#7f8c8d", False), "kicker": ("#c792ea", "#8e44ad", True),
+        }
+        fmts = {None: QTextCharFormat()}
+        for cat, (d, l, bold) in spec.items():
+            f = QTextCharFormat()
+            f.setForeground(QColor(d if dark else l))
+            if bold:
+                f.setFontWeight(QFont.Weight.Bold)
+            fmts[cat] = f
+        return fmts
+
+    def _classify(self, frag):
+        """Colour category for a log fragment (None = default text)."""
+        if self._bol:
+            if frag.startswith("Traceback"):
+                self._in_tb = True
+            elif self._in_tb:
+                if frag[:1] in (" ", "\t"):
+                    return "tb"
+                self._in_tb = False
+                return "error"  # the closing 'SomeError: message' line
+        for cat, rx in LOG_RULES:
+            if rx.search(self._line):
+                return cat
+        return None
+
+    def _place(self, blk, mask):
+        """Tag a log line with its filter bits and show/hide it per the active filter."""
+        blk.setUserState(mask)
+        vis = (mask != 0) if self.filter_classified_only else (not self.filter_mask or bool(mask & self.filter_mask))
+        if blk.isVisible() != vis:
+            blk.setVisible(vis)
+            self.view.document().markContentsDirty(blk.position(), blk.length())
+
+    def set_filter(self, mask, classified_only):
+        """Apply the shared filter selection to every line of this log."""
+        self.filter_mask, self.filter_classified_only = mask, classified_only
+        doc = self.view.document()
+        blk = doc.begin()
+        while blk.isValid():
+            m = max(blk.userState(), 0)
+            vis = (m != 0) if classified_only else (not mask or bool(m & mask))
+            if blk.isVisible() != vis:
+                blk.setVisible(vis)
+            blk = blk.next()
+        doc.markContentsDirty(0, doc.characterCount())
+        if self.auto_scroll:
+            sb = self.view.verticalScrollBar()
+            QTimer.singleShot(0, lambda: sb.setValue(sb.maximum()))  # after relayout, respect auto-scroll
+
+    def scroll_to_end(self):
+        self.view.moveCursor(QTextCursor.MoveOperation.End)
+        self.view.verticalScrollBar().setValue(self.view.verticalScrollBar().maximum())
+
+    def _gen_summary(self, secs):
+        self._gen_times.append(secs)
+        n, avg = len(self._gen_times), sum(self._gen_times) / len(self._gen_times)
+        return f"[kicker] Generation time: {_fmt_secs(secs)}  (run {n} · avg {_fmt_secs(avg)})\n"
+
+
 class Kicker(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -228,11 +362,8 @@ class Kicker(QMainWindow):
         self.cfg = load_config()
         self.rows, self.groups, self.other = {}, {}, []
         self._loading = self._restart = False
-        self._cr = False
-        self._cat, self._line, self._bol, self._in_tb = None, "", True, False  # log colouring state
         self.filter_mask, self.filter_classified_only = 0, False  # active bits; all boxes means classified-only mode
-        self._esc, self._gen_times = "", []  # partial ANSI code, run times
-        self._server_online = False
+        self._server_online = self._server_online2 = False
         self._health_busy = False
         self.gpus = []
         self.selected_gpu_token = None
@@ -247,6 +378,9 @@ class Kicker(QMainWindow):
         self._kill_timer = QTimer(self)  # escalates a stuck Stop to SIGKILL; cancelled when the process exits
         self._kill_timer.setSingleShot(True)
         self._kill_timer.timeout.connect(self._force_kill)
+        self.s2 = ComfySession(self)  # second ComfyUI session: own port, GPU, process and log tab
+        self.s2.output.connect(self._log2)
+        self.s2.stateChanged.connect(self._sync_buttons2)
         self._build_ui()
         self.reload_flags()
         self._health_nam = QNetworkAccessManager(self)
@@ -289,14 +423,14 @@ class Kicker(QMainWindow):
 
         gpu_row = QHBoxLayout()
         gpu_row.addWidget(QLabel("ComfyUI GPU:"))
+        self.gpu_status = QLabel("Detecting CUDA GPUs…")
+        gpu_row.addWidget(self.gpu_status)
         self.gpu_container = QWidget()
         self.gpu_layout = QHBoxLayout(self.gpu_container)
         self.gpu_layout.setContentsMargins(0, 0, 0, 0)
         self.gpu_layout.setSpacing(12)
         self.gpu_group = QButtonGroup(self)
         self.gpu_group.setExclusive(True)
-        self.gpu_status = QLabel("Detecting CUDA GPUs…")
-        self.gpu_layout.addWidget(self.gpu_status)
         gpu_row.addWidget(self.gpu_container, 1)
         self.gpu_refresh = QPushButton("Refresh GPUs")
         self.gpu_refresh.setToolTip("Re-detect CUDA GPUs using the configured ComfyUI Python environment.")
@@ -339,11 +473,11 @@ class Kicker(QMainWindow):
         split.setOrientation(Qt.Orientation.Vertical)
         split.setChildrenCollapsible(False)
         self.tabs = QTabWidget()
-        self.log = QPlainTextEdit()
-        self.log.setReadOnly(True)
-        self.log.setMaximumBlockCount(5000)
-        self.log.setStyleSheet("font-family: monospace; font-size: 11px;")
-        self._fmts = self._make_formats()
+        self.log_tabs = QTabWidget()
+        self.log1, self.log2 = LogPane(), LogPane()
+        self.log_tabs.addTab(self.log1, "Session 1")
+        self.log_tabs.addTab(self.log2, "Session 2")
+        self.log = self.log1.view  # alias: the session-1 log view
         flags_body = QWidget()
         flags_layout = QVBoxLayout(flags_body)
         flags_layout.setContentsMargins(0, 0, 0, 0)
@@ -363,7 +497,7 @@ class Kicker(QMainWindow):
         logbox = QWidget()
         lv = QVBoxLayout(logbox)
         lv.setContentsMargins(0, 0, 0, 0)
-        lv.addWidget(self.log, 1)
+        lv.addWidget(self.log_tabs, 1)
         fr = QHBoxLayout()
         lbl = QLabel("Show only:")
         lbl.setToolTip("Tick one or more categories to show matching lines only. Check All or untick all to show every line.")
@@ -414,6 +548,8 @@ class Kicker(QMainWindow):
         self.command_copy.clicked.connect(lambda: QApplication.clipboard().setText(self.command_str()))
         command_row.addWidget(self.command_copy)
         v.insertLayout(2, command_row)
+        self.s2_section = self._build_session2_section()
+        v.insertWidget(3, self.s2_section)
         self.sections_splitter = split
         self.sections_layout = v
         self._section_spacer = QWidget()
@@ -427,6 +563,12 @@ class Kicker(QMainWindow):
         hsplit.addWidget(leftw)
         self.ttc = WorkflowPanel(self.monitor_endpoint, self.cfg.get("workflow_monitor"))  # native Magik TtC panel: no browser engine involved
         self.ttc.setTitle("")
+        self.ttc2 = WorkflowPanel(lambda override=None: self.monitor_endpoint(self.s2.port if override is None else override),
+                                   self.cfg.get("workflow_monitor2"))
+        self.ttc2.setTitle("")
+        self.monitor_tabs = QTabWidget()
+        self.monitor_tabs.addTab(self.ttc, "Session 1")
+        self.monitor_tabs.addTab(self.ttc2, "Session 2")
         self.timing_shell = QFrame()
         self.timing_shell.setObjectName("timingPanel")
         timing_bg = self.palette().window().color().darker(140).name()
@@ -444,7 +586,7 @@ class Kicker(QMainWindow):
         timing_header.addStretch(1)
         timing_header.addWidget(self.btn_ttc)
         main.addLayout(timing_header)
-        timing_layout.addWidget(self.ttc, 1)
+        timing_layout.addWidget(self.monitor_tabs, 1)
         hsplit.addWidget(self.timing_shell)
         hsplit.setChildrenCollapsible(False)
         hsplit.setStretchFactor(0, 1)
@@ -453,9 +595,10 @@ class Kicker(QMainWindow):
         self._timing_sizes = [890, 500]
         hsplit.setSizes(self._timing_sizes)
         main.addWidget(hsplit, 1)
-        self.ttc.batchFinished.connect(self._play_batch_sound)
-        self.ttc.set_background_poll(self.sound_enabled.isChecked())
-        self.ttc.setVisible(self.btn_ttc.isChecked())
+        for panel in (self.ttc, self.ttc2):
+            panel.batchFinished.connect(self._play_batch_sound)
+            panel.set_background_poll(self.sound_enabled.isChecked())
+        self.monitor_tabs.setVisible(self.btn_ttc.isChecked())
         self.timing_shell.setVisible(self.btn_ttc.isChecked())
         # Keep the action bar in the left column; timing spans the full remaining height.
 
@@ -521,6 +664,9 @@ class Kicker(QMainWindow):
         self.monitor_status = QLabel("Monitor: waiting")
         self.ttc.monitorStatus.connect(self.monitor_status.setText)
         bar.addWidget(self.monitor_status)
+        self.monitor_status2 = QLabel("S2 monitor: waiting")
+        self.ttc2.monitorStatus.connect(self.monitor_status2.setText)
+        bar.addWidget(self.monitor_status2)
         v.addLayout(bar)
         self._sync_buttons()
 
@@ -529,10 +675,138 @@ class Kicker(QMainWindow):
             sizes = self.main_splitter.sizes()
             if len(sizes) == 2 and sizes[1] > 0:
                 self._timing_sizes = sizes
-        self.ttc.setVisible(expanded)
+        self.monitor_tabs.setVisible(expanded)
         self.timing_shell.setVisible(expanded)
         if expanded:
             self.main_splitter.setSizes(self._timing_sizes)
+
+    # ---------- second session ----------
+    def _build_session2_section(self):
+        """Collapsible section for the second ComfyUI session: own port, GPU, buttons."""
+        s2cfg = self.cfg.get("session2", {}) if isinstance(self.cfg.get("session2"), dict) else {}
+        body = QWidget()
+        bl = QVBoxLayout(body)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.setSpacing(6)
+        port_row = QHBoxLayout()
+        port_row.addWidget(QLabel("Port"))
+        self.s2_port = QSpinBox()
+        self.s2_port.setRange(1025, 65534)
+        self.s2_port.setValue(_clamp(s2cfg.get("port"), 1025, 65534, 8288))
+        self.s2_port.setToolTip("Listen port for the second ComfyUI session.\n"
+                                "Session 1 uses the --port flag above; keep the two ports different.")
+        self.s2_port.valueChanged.connect(self._s2_port_changed)
+        port_row.addWidget(self.s2_port)
+        hint = QLabel("session 1 uses the --port flag above")
+        hint.setStyleSheet("color: palette(placeholder-text);")
+        port_row.addWidget(hint)
+        port_row.addStretch(1)
+        bl.addLayout(port_row)
+        gpu_row = QHBoxLayout()
+        gpu_row.addWidget(QLabel("GPU:"))
+        self.s2_gpu_status = QLabel("Detecting CUDA GPUs…")
+        gpu_row.addWidget(self.s2_gpu_status)
+        self.s2_gpu_container = QWidget()
+        self.s2_gpu_layout = QHBoxLayout(self.s2_gpu_container)
+        self.s2_gpu_layout.setContentsMargins(0, 0, 0, 0)
+        self.s2_gpu_layout.setSpacing(12)
+        self.s2_gpu_group = QButtonGroup(self)
+        self.s2_gpu_group.setExclusive(True)
+        gpu_row.addWidget(self.s2_gpu_container, 1)
+        bl.addLayout(gpu_row)
+        btn_row = QHBoxLayout()
+        self.btn_launch2, self.btn_stop2, self.btn_restart2 = QPushButton("▶  Launch 2"), QPushButton("■  Stop 2"), QPushButton("⇻  Restart 2")
+        self.btn_open2 = QPushButton("Open in browser")
+        self.btn_open2.setToolTip("Open this session's ComfyUI (its own port) with the selected browser,\n"
+                                  "in a new window / app window like session 1")
+        designs = (
+            (self.btn_launch2, "#16845b", "#20a472", "#116747", "#16845b", "#ffffff"),
+            (self.btn_stop2, "#202632", "#382931", "#492c35", "#e87979", "#f29a9a"),
+            (self.btn_restart2, "#202632", "#25364d", "#294361", "#71a5ed", "#93bcf3"),
+        )
+        for button, bg, hover, pressed, border, fg in designs:
+            button.setMinimumHeight(28)
+            button.setMinimumWidth(96)
+            button.setStyleSheet(f"""
+                QPushButton {{ background-color: {bg}; color: {fg};
+                    border: 1px solid {border}; border-radius: 6px;
+                    padding: 4px 10px; font-weight: 600; }}
+                QPushButton:hover {{ background-color: {hover}; }}
+                QPushButton:pressed {{ background-color: {pressed}; }}
+                QPushButton:focus {{ border: 2px solid {fg}; padding: 3px 9px; }}
+                QPushButton:disabled {{ background-color: #252934; color: #727887;
+                    border: 1px solid #424856; }}
+            """)
+        self.btn_open2.setMinimumHeight(28)
+        self.btn_launch2.clicked.connect(self.launch2)
+        self.btn_stop2.clicked.connect(self.stop2)
+        self.btn_restart2.clicked.connect(self.restart2)
+        self.btn_open2.clicked.connect(self.open_browser2)
+        for b in (self.btn_launch2, self.btn_stop2, self.btn_restart2, self.btn_open2):
+            btn_row.addWidget(b)
+        self.s2_status = QLabel("Stopped")
+        self.s2_status.setTextFormat(Qt.TextFormat.RichText)
+        btn_row.addWidget(self.s2_status, 1)
+        bl.addLayout(btn_row)
+        self.preview2 = QLineEdit()
+        self.preview2.setReadOnly(True)
+        self.preview2.setStyleSheet("QLineEdit { font-family: monospace; color: #800080; background-color: #000000; }")
+        bl.addWidget(self.preview2)
+        self._s2_port_changed(self.s2_port.value())
+        return CollapsibleSection("Second session (other GPU)", body, bool(s2cfg.get("expanded", False)))
+
+    def _s2_port_changed(self, value):
+        self.s2.port = int(value)
+        self.update_preview()
+
+    def launch2(self):
+        self.save_config()
+        self.s2.launch()
+        self._sync_buttons2()
+
+    def stop2(self):
+        self.s2.stop()
+        self._sync_buttons2()
+
+    def restart2(self):
+        self.s2.restart()
+        self._sync_buttons2()
+
+    def _sync_buttons2(self):
+        if not hasattr(self, "btn_launch2"):
+            return
+        run, online = self.s2.running(), self._server_online2
+        self.btn_launch2.setEnabled(not run and not online)
+        self.btn_stop2.setEnabled(run)
+        self.btn_restart2.setEnabled(run or not online)
+        if online:
+            dot, label = "#2ecc71", "Running" if run else "Running (external process)"
+        elif run:
+            dot, label = "#f1c40f", "Starting / restarting"
+        else:
+            dot, label = "#e74c3c", "Stopped / unavailable"
+        pid = f" (pid {self.s2.proc.processId()})" if run else ""
+        self.s2_status.setText(f'<span style="color:{dot}; font-size:15px;">●</span> {label}{pid}')
+
+    def flag_port(self):
+        """The --port value from the shared flag rows (session 1's port)."""
+        args = self.flag_args()
+        for i, arg in enumerate(args):
+            if arg == "--port" and i + 1 < len(args):
+                return args[i + 1]
+            if arg.startswith("--port="):
+                return arg.split("=", 1)[1]
+        return "8188"
+
+    def _gpu2_selected(self, index, checked):
+        if not checked:
+            return
+        device = next((item for item in self.gpus if int(item["index"]) == index), None)
+        if device is None:
+            return
+        self.s2.gpu_index = index
+        self.s2.gpu_token = device["visibility_token"]
+        self.update_preview()
 
     def _arrange_sections(self, *_):
         flags_on = self.flags_section.toggle.isChecked()
@@ -620,6 +894,7 @@ class Kicker(QMainWindow):
             self.sound_player.stop()
         if hasattr(self, "ttc"):
             self.ttc.set_background_poll(enabled)
+            self.ttc2.set_background_poll(enabled)
 
     def _play_batch_sound(self):
         if self.sound_enabled.isChecked():
@@ -838,45 +1113,61 @@ class Kicker(QMainWindow):
         available = {int(device["index"]) for device in devices}
         selected = previous if previous in available else (int(devices[0]["index"]) if devices else None)
 
-        while self.gpu_layout.count():
-            item = self.gpu_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                if isinstance(widget, QRadioButton):
-                    self.gpu_group.removeButton(widget)
-                widget.deleteLater()
         self.gpus = devices
         self.selected_gpu_index = selected
         self.selected_gpu_token = None
+        self.gpu_status.setText(note if not devices else note + ":")
+        self.gpu_status.setStyleSheet("" if devices else "color: palette(placeholder-text);")
+        self._fill_gpu_picker(self.gpu_layout, self.gpu_group, devices, selected, self._gpu_selected)
 
-        if not devices:
-            self.gpu_status = QLabel(note)
-            self.gpu_status.setStyleSheet("color: palette(placeholder-text);")
-            self.gpu_layout.addWidget(self.gpu_status)
-        else:
-            self.gpu_status = QLabel(note + ":")
-            self.gpu_layout.addWidget(self.gpu_status)
-            for device in devices:
-                index = int(device["index"])
-                memory_gb = device["memory"] / (1024 ** 3)
-                label = f"CUDA {index} · {device['name']} · {memory_gb:.0f} GB"
-                radio = QRadioButton(label)
-                radio.setToolTip(
-                    f"CUDA logical device {index}\n{device['name']}\n"
-                    f"{memory_gb:.1f} GiB total VRAM\n"
-                    "Comfy Kicker will expose only this GPU to ComfyUI on the next launch."
-                )
-                self.gpu_group.addButton(radio, index)
-                self.gpu_layout.addWidget(radio)
-                radio.toggled.connect(lambda checked, idx=index: self._gpu_selected(idx, checked))
-                if index == selected:
-                    radio.setChecked(True)
-                    self.selected_gpu_token = device["visibility_token"]
-            self.gpu_layout.addStretch(1)
+        if hasattr(self, "s2_gpu_group"):
+            s2cfg = self.cfg.get("session2", {})
+            previous2 = s2cfg.get("gpu_device") if isinstance(s2cfg, dict) else None
+            try:
+                previous2 = int(previous2) if previous2 is not None else None
+            except (TypeError, ValueError):
+                previous2 = None
+            available = {int(device["index"]) for device in devices}
+            selected2 = previous2 if previous2 in available else None
+            if selected2 is None and devices:
+                # Default to a GPU different from session 1's when possible.
+                others = [int(device["index"]) for device in devices if int(device["index"]) != selected]
+                selected2 = others[0] if others else int(devices[0]["index"])
+            self.s2.gpu_index, self.s2.gpu_token = selected2, None
+            self.s2_gpu_status.setText(note if not devices else note + ":")
+            self.s2_gpu_status.setStyleSheet("" if devices else "color: palette(placeholder-text);")
+            self._fill_gpu_picker(self.s2_gpu_layout, self.s2_gpu_group, devices, selected2, self._gpu2_selected)
+
         if selected is not None:
             self.cfg["gpu_device"] = selected
         self.update_preview()
         self._log(f"[kicker] {note}\n")
+
+    def _fill_gpu_picker(self, layout, group, devices, selected, on_select):
+        """Rebuild one GPU radio picker from the detected devices."""
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                if isinstance(widget, QRadioButton):
+                    group.removeButton(widget)
+                widget.deleteLater()
+        for device in devices:
+            index = int(device["index"])
+            memory_gb = device["memory"] / (1024 ** 3)
+            label = f"CUDA {index} · {device['name']} · {memory_gb:.0f} GB"
+            radio = QRadioButton(label)
+            radio.setToolTip(
+                f"CUDA logical device {index}\n{device['name']}\n"
+                f"{memory_gb:.1f} GiB total VRAM\n"
+                "Comfy Kicker will expose only this GPU to ComfyUI on the next launch."
+            )
+            group.addButton(radio, index)
+            layout.addWidget(radio)
+            radio.toggled.connect(lambda checked, idx=index: on_select(idx, checked))
+            if index == selected:
+                radio.setChecked(True)
+        layout.addStretch(1)
 
     def _gpu_selected(self, index, checked):
         if not checked:
@@ -926,15 +1217,25 @@ class Kicker(QMainWindow):
         return f"{env}{shlex.join(self.launch_command())}"
 
     def update_preview(self):
-        if hasattr(self, "preview") and not self._loading:
+        if self._loading:
+            return
+        if hasattr(self, "preview"):
             self.preview.setText(self.command_str())
             self.preview.setCursorPosition(0)
+        if hasattr(self, "preview2") and hasattr(self, "s2"):
+            self.preview2.setText(self.s2.command_str())
+            self.preview2.setCursorPosition(0)
 
     # ---------- process ----------
     def _running(self):
         return self.proc.state() != QProcess.ProcessState.NotRunning
 
     def _probe_server(self):
+        if getattr(self, "s2", None) is not None:
+            req2 = QNetworkRequest(QUrl(self.s2.endpoint() + "/system_stats"))
+            req2.setTransferTimeout(1500)
+            rep2 = self._health_nam.get(req2)
+            rep2.finished.connect(lambda: self._health_reply2(rep2))
         if self._health_busy:
             return
         self._health_busy = True
@@ -959,6 +1260,18 @@ class Kicker(QMainWindow):
             return
         self._server_online = self._ready = online
         self._sync_buttons()
+
+    def _health_reply2(self, reply):
+        online = reply.error() == QNetworkReply.NetworkError.NoError
+        if online:
+            try:
+                data = json.loads(bytes(reply.readAll()).decode("utf-8"))
+                online = isinstance(data, dict) and "system" in data
+            except (ValueError, UnicodeError):
+                online = False
+        reply.deleteLater()
+        self._server_online2 = online
+        self._sync_buttons2()
 
     def _sync_buttons(self):
         run, online = self._running(), self._server_online
@@ -1036,7 +1349,7 @@ class Kicker(QMainWindow):
             env.insert("CUDA_VISIBLE_DEVICES", str(self.selected_gpu_token))
         self.proc.setProcessEnvironment(env)
         self.proc.setWorkingDirectory(comfy)
-        self._gen_times = []
+        self.log1._gen_times.clear()
         self._ready, self._tail = False, ""
         self._log(f"[kicker] {self.command_str()}\n")
         self._monitor_base = self.monitor_endpoint()
@@ -1170,8 +1483,13 @@ class Kicker(QMainWindow):
         return base.toString().rstrip("/")
 
     def open_browser(self):
+        self._open_url(self.monitor_endpoint())
+
+    def open_browser2(self):
+        self._open_url(self.s2.endpoint())
+
+    def _open_url(self, url):
         self._update_open_tip()
-        url = self.monitor_endpoint()
         entry = self._resolved_browser
         app_mode = self.cfg.get("browser_app_modes", {}).get(self.browser, False)
         shortcut = self.cfg.get("browser_app_shortcuts", {}).get(self.browser) if app_mode else None
@@ -1230,12 +1548,15 @@ class Kicker(QMainWindow):
             "Auto-scroll OFF: new log lines will not move the view.\n"
             "Scroll freely, then click to turn auto-scroll ON and jump to the newest output."
         )
+        for pane in (self.log1, self.log2):
+            pane.auto_scroll = enabled
         if enabled:
             self.scroll_log_to_end()
 
     def scroll_log_to_end(self):
-        self.log.moveCursor(QTextCursor.MoveOperation.End)
-        self.log.verticalScrollBar().setValue(self.log.verticalScrollBar().maximum())
+        pane = self.log_tabs.currentWidget() if hasattr(self, "log_tabs") else None
+        if pane is not None:
+            pane.scroll_to_end()
 
     def open_log(self):
         log = Path(self.comfy_edit.text().strip()) / "user" / "comfyui.log"
@@ -1253,92 +1574,13 @@ class Kicker(QMainWindow):
         self._sync_buttons()
 
     def _log(self, text):
-        """Append to the log; a bare \\r (tqdm progress) overwrites the current line."""
-        text = self._esc + text  # an escape code may arrive split across two reads
-        m = re.search(r"\x1b(\[[0-9;?]*[ -/]*)?$", text)
-        self._esc, text = (text[m.start():], text[:m.start()]) if m else ("", text)
-        text = ANSI_RE.sub("", text)
-        extra = []  # Kicker summary lines to add once this chunk is fully written
-        sb = self.log.verticalScrollBar()
-        follow = self.btn_log_end.isChecked()  # explicit toggle controls whether new output moves the view
-        cur = QTextCursor(self.log.document())  # private cursor: leaves the user's selection alone
-        cur.movePosition(QTextCursor.MoveOperation.End)
-        for tok in re.split(r"(\r\n|\r|\n)", text):
-            if tok == "\r":
-                self._cr = True
-            elif tok in ("\n", "\r\n"):
-                done = GEN_TIME_RE.search(self._line)
-                cur.insertText("\n")
-                self._cr, self._bol, self._cat, self._line = False, True, None, ""
-                self._place(cur.block(), 0)  # fresh empty line: hidden while a filter is active
-                if done:
-                    extra.append(self._gen_summary(float(done.group(1))))
-            elif tok:
-                if self._cr:
-                    cur.movePosition(QTextCursor.MoveOperation.StartOfBlock, QTextCursor.MoveMode.KeepAnchor)
-                    cur.removeSelectedText()
-                    self._cr, self._bol, self._cat, self._line = False, True, None, ""
-                earlier = bool(self._line)
-                self._line += tok
-                cat = self._classify(tok)
-                changed = bool(cat) and (self._cat is None or LOG_RANK[cat] < LOG_RANK[self._cat])
-                if changed:
-                    self._cat = cat
-                # A new/unknown colour category must never interrupt log ingestion.
-                cur.insertText(tok, self._fmts.get(self._cat, self._fmts[None]))
-                if changed and earlier:  # category only became clear mid-line: recolour the whole line
-                    cur.movePosition(QTextCursor.MoveOperation.StartOfBlock, QTextCursor.MoveMode.KeepAnchor)
-                    cur.setCharFormat(self._fmts[self._cat])
-                    cur.movePosition(QTextCursor.MoveOperation.End)
-                self._bol = False
-                self._place(cur.block(), sum(bit for bit, _, rx in FILTER_RULES if rx.search(self._line) or (bit == 8 and self._cat in ("error", "tb"))))
-        if follow:
-            sb.setValue(sb.maximum())
-        for line in extra:
-            self._log(line)
+        """Append to session 1's log (see LogPane.log)."""
+        self.log1.log(text)
 
-    def _make_formats(self):
-        """Per-category text formats; pastel colours on dark themes, deeper ones on light."""
-        dark = self.log.palette().base().color().lightness() < 128
-        spec = {  # category: (dark-theme colour, light-theme colour, bold)
-            "error": ("#ff6b6b", "#c0392b", True), "tb": ("#d98a8a", "#a5524a", False),
-            "warn": ("#f5c04a", "#b9770e", False), "success": ("#6bcf7f", "#1e8449", False),
-            "info": ("#6cb6ff", "#1f6fb2", False), "progress": ("#5fb3b3", "#148f8f", False),
-            "rate": ("#5fb3b3", "#148f8f", False),
-            "workflow_eta": ("#c792ea", "#8e44ad", True),
-            "debug": ("#8a8f98", "#7f8c8d", False), "kicker": ("#c792ea", "#8e44ad", True),
-        }
-        fmts = {None: QTextCharFormat()}
-        for cat, (d, l, bold) in spec.items():
-            f = QTextCharFormat()
-            f.setForeground(QColor(d if dark else l))
-            if bold:
-                f.setFontWeight(QFont.Weight.Bold)
-            fmts[cat] = f
-        return fmts
-
-    def _classify(self, frag):
-        """Colour category for a log fragment (None = default text)."""
-        if self._bol:
-            if frag.startswith("Traceback"):
-                self._in_tb = True
-            elif self._in_tb:
-                if frag[:1] in (" ", "\t"):
-                    return "tb"
-                self._in_tb = False
-                return "error"  # the closing 'SomeError: message' line
-        for cat, rx in LOG_RULES:
-            if rx.search(self._line):
-                return cat
-        return None
-
-    def _place(self, blk, mask):
-        """Tag a log line with its filter bits and show/hide it per the active filter."""
-        blk.setUserState(mask)
-        vis = (mask != 0) if self.filter_classified_only else (not self.filter_mask or bool(mask & self.filter_mask))
-        if blk.isVisible() != vis:
-            blk.setVisible(vis)
-            self.log.document().markContentsDirty(blk.position(), blk.length())
+    def _log2(self, text):
+        """Append to session 2's log."""
+        if hasattr(self, "log2"):
+            self.log2.log(text)
 
     def _toggle_all_filters(self, checked):
         for _, checkbox in self.filter_boxes:
@@ -1357,23 +1599,8 @@ class Kicker(QMainWindow):
         all_selected = bool(self.filter_boxes) and len(selected) == len(self.filter_boxes)
         self.filter_classified_only = all_selected
         self.filter_mask = sum(selected) if selected and not all_selected else 0
-        doc = self.log.document()
-        blk = doc.begin()
-        while blk.isValid():
-            mask = max(blk.userState(), 0)
-            vis = (mask != 0) if self.filter_classified_only else (not self.filter_mask or bool(mask & self.filter_mask))
-            if blk.isVisible() != vis:
-                blk.setVisible(vis)
-            blk = blk.next()
-        doc.markContentsDirty(0, doc.characterCount())
-        if self.btn_log_end.isChecked():
-            sb = self.log.verticalScrollBar()
-            QTimer.singleShot(0, lambda: sb.setValue(sb.maximum()))  # after relayout, respect auto-scroll
-
-    def _gen_summary(self, secs):
-        self._gen_times.append(secs)
-        n, avg = len(self._gen_times), sum(self._gen_times) / len(self._gen_times)
-        return f"[kicker] Generation time: {_fmt_secs(secs)}  (run {n} · avg {_fmt_secs(avg)})\n"
+        for pane in (self.log1, self.log2):
+            pane.set_filter(self.filter_mask, self.filter_classified_only)
 
     # ---------- persistence ----------
     def save_config(self):
@@ -1385,20 +1612,30 @@ class Kicker(QMainWindow):
                         gpu_device=(self.selected_gpu_index if self.selected_gpu_index is not None
                                     else self.cfg.get("gpu_device")),
                         sound={"enabled": self.sound_enabled.isChecked(), "file": self.sound_path,
-                               "volume": self.sound_volume.value()})
+                               "volume": self.sound_volume.value()},
+                        session2={"port": self.s2_port.value(), "gpu_device": self.s2.gpu_index,
+                                  "expanded": self.s2_section.toggle.isChecked()},
+                        workflow_monitor2=self.ttc2.settings())
         CONFIG.parent.mkdir(parents=True, exist_ok=True)
         CONFIG.write_text(json.dumps(self.cfg, indent=2))
 
     def closeEvent(self, e):
-        if self._running():
+        if self._running() or self.s2.running():
             if QMessageBox.question(self, "Comfy Kicker", "ComfyUI is still running. Stop it and quit?") != QMessageBox.StandardButton.Yes:
                 e.ignore()
                 return
             self._restart = False
-            self.proc.terminate()
-            if not self.proc.waitForFinished(8000):
-                self.proc.kill()
-                self.proc.waitForFinished(2000)
+            self.s2._restart = False
+            if self._running():
+                self.proc.terminate()
+                if not self.proc.waitForFinished(8000):
+                    self.proc.kill()
+                    self.proc.waitForFinished(2000)
+            if self.s2.running():
+                self.s2.proc.terminate()
+                if not self.s2.proc.waitForFinished(8000):
+                    self.s2.proc.kill()
+                    self.s2.proc.waitForFinished(2000)
         self.save_config()
         if hasattr(self, "_status_tray"):
             self._status_tray.hide()
