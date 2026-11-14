@@ -69,6 +69,11 @@ tab and is fully independent per session:
   (`http://127.0.0.1:<port>`) with the shared browser choice in a new window /
   app window.
 
+Each tab is tinted with its own accent theme (`PANEL_THEMES` in `panel.py`:
+green for the first GPU tab, blue for the second — frame, section borders,
+section toggles, checked GPU radio and the Launch button), so the two panels
+are easy to tell apart at a glance.
+
 Each tab starts its own ComfyUI process from the same venv and folder — no
 second venv is needed. The chosen GPU is isolated per process via
 `CUDA_VISIBLE_DEVICES`, so each session sees its GPU as CUDA device 0.

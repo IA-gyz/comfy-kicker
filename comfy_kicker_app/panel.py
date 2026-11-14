@@ -5,6 +5,14 @@ from .monitor import WorkflowPanel
 from .session import ComfySession
 from .widgets import CollapsibleSection, FastRow, FlagRow, LogPane
 
+# One accent theme per GPU tab, so the two panels are easy to tell apart.
+PANEL_THEMES = [
+    {"accent": "#20a472", "accent_hover": "#2cc98f", "accent_pressed": "#116747",
+     "border": "#16845b", "bg": "rgba(32, 164, 114, 0.07)"},   # GPU tab 1: green
+    {"accent": "#5b8def", "accent_hover": "#7aa5f5", "accent_pressed": "#294361",
+     "border": "#3f6fd1", "bg": "rgba(91, 141, 239, 0.07)"},    # GPU tab 2: blue
+]
+
 
 class SessionPanel(QWidget):
     """A whole launcher panel for one GPU/session. Only the ComfyUI folder / venv
@@ -14,6 +22,7 @@ class SessionPanel(QWidget):
         super().__init__()
         self.k = kicker
         self.idx = idx
+        self.theme = PANEL_THEMES[idx % len(PANEL_THEMES)]
         self.cfg = kicker.cfg["sessions"][idx]  # this session's config sub-dict
         self.rows, self.groups, self.other = {}, {}, []
         self._loading = False
@@ -162,7 +171,7 @@ class SessionPanel(QWidget):
         self.timing_shell = QFrame()
         self.timing_shell.setObjectName("timingPanel")
         timing_bg = self.palette().window().color().darker(140).name()
-        self.timing_shell.setStyleSheet(f"QFrame#timingPanel {{ background: {timing_bg}; border: 1px solid #697386; border-radius: 4px; }}")
+        self.timing_shell.setStyleSheet(f"QFrame#timingPanel {{ background: {timing_bg}; border: 1px solid {self.theme['border']}; border-radius: 4px; }}")
         timing_layout = QVBoxLayout(self.timing_shell)
         self.btn_ttc = QToolButton()
         self.btn_ttc.setAutoRaise(True)
@@ -197,7 +206,7 @@ class SessionPanel(QWidget):
         self.btn_stop.setText("■  Stop")
         self.btn_restart.setText("⇻  Restart")
         designs = (
-            (self.btn_launch, "#16845b", "#20a472", "#116747", "#16845b", "#ffffff"),
+            (self.btn_launch, self.theme["border"], self.theme["accent"], self.theme["accent_pressed"], self.theme["border"], "#ffffff"),
             (self.btn_stop, "#202632", "#382931", "#492c35", "#e87979", "#f29a9a"),
             (self.btn_restart, "#202632", "#25364d", "#294361", "#71a5ed", "#93bcf3"),
         )
@@ -253,6 +262,26 @@ class SessionPanel(QWidget):
         self.ttc.monitorStatus.connect(self.monitor_status.setText)
         bar.addWidget(self.monitor_status)
         v.addLayout(bar)
+        self._apply_theme()
+
+    def _apply_theme(self):
+        """Tint this GPU tab with its accent theme: frame, sections, toggles."""
+        t = self.theme
+        self.setObjectName(f"sessionPanel{self.idx}")
+        self.setAutoFillBackground(True)
+        self.setStyleSheet(
+            f"QWidget#sessionPanel{self.idx} {{ background-color: {t['bg']}; "
+            f"border: 1px solid {t['border']}; border-radius: 6px; }}"
+        )
+        for section, name in ((self.flags_section, "flagsSection"), (self.log_section, "logSection")):
+            section.setObjectName(name)
+            section.setStyleSheet(
+                f"QFrame#{name} {{ border: 1px solid {t['border']}; border-radius: 4px; background: transparent; }}"
+                f"QToolButton {{ color: {t['accent']}; font-weight: 600; }}"
+            )
+        self.gpu_container.setStyleSheet(
+            f"QRadioButton::indicator:checked {{ background-color: {t['accent']}; border: 1px solid {t['border']}; }}"
+        )
 
     def _toggle_timing(self, expanded):
         if not expanded:
