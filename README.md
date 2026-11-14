@@ -18,8 +18,10 @@ python comfy_kicker.py --install-desktop
 - `comfy_kicker_app/common.py` — shared imports, settings, constants and log rules.
 - `comfy_kicker_app/launcher.py` — ComfyUI discovery, config, browser and launch helpers.
 - `comfy_kicker_app/monitor.py` — queue and workflow monitoring panels.
-- `comfy_kicker_app/session.py` — second ComfyUI session (own process, port and GPU).
-- `comfy_kicker_app/ui.py` — reusable UI widgets and main window.
+- `comfy_kicker_app/widgets.py` — flag rows, collapsible sections, per-session log panes.
+- `comfy_kicker_app/session.py` — one ComfyUI process per GPU tab (own port and GPU).
+- `comfy_kicker_app/panel.py` — the dedicated per-GPU session panel (one tab each).
+- `comfy_kicker_app/ui.py` — main window: common folder row + session tabs.
 - `comfy_kicker_app/main.py` — startup, single-instance guard and desktop integration.
 
 The package directory must remain alongside `comfy_kicker.py`.
@@ -48,27 +50,32 @@ Known cards get a product photo next to their name in both GPU pickers
 `comfy_kicker_app/assets/`): the ASUS card photo is the RTX 3090, the PNY
 photo is the RTX 4070 Ti Super.
 
-## Second session (other GPU)
+## Per-GPU session tabs
 
-The **Second session (other GPU)** section starts a second ComfyUI process from
-the same venv and the same ComfyUI folder — no second venv is needed — while
-sharing the discovered flags, extra arguments, environment and prefix. Only two
-things are per-session:
+The window has one **common row** at the top — ComfyUI folder and venv folder —
+shared by both GPUs. Below it, one **dedicated tab per GPU** (the tab shows the
+GPU's name and product photo once detected). Everything else lives inside each
+tab and is fully independent per session:
 
-- **Port** (default 8288): session 2 forces its own `--port`, so it never
-  collides with session 1's `--port`. Keep the two ports different.
-- **GPU**: its own radio-button picker, defaulting to a GPU different from
-  session 1's. The choice is applied per process via `CUDA_VISIBLE_DEVICES`, so
-  each session sees its GPU as CUDA device 0. Launching with the same GPU or
-  port as a running session 1 only logs a warning.
+- GPU radio picker (defaulting to a GPU different from the other tab's), with
+  **Refresh GPUs** on each tab;
+- its own flags (Favorites / All other flags), presets, sound, prefix / extra
+  arguments / environment, command preview and Launch / Stop / Restart;
+- its own log with its own filter checkboxes, auto-scroll and Open Log;
+- its own `--port` (the second tab defaults to 8288), so the two servers never
+  collide;
+- its own workflow-timing panel polling that session's port;
+- its own **Open in browser** button, opening that session's URL
+  (`http://127.0.0.1:<port>`) with the shared browser choice in a new window /
+  app window.
 
-Each session has its own log tab (the log filter checkboxes apply to both), its
-own workflow-timing panel tab (polling that session's port), its own status
-label, and its own **Open in browser** button, which opens that session's URL
-(`http://127.0.0.1:<port>`) with the selected browser in a new window / app
-window — the same browser as session 1 by default. Both sessions are stopped
-when the window is closed. Port and GPU choices are saved in the config.
+Each tab starts its own ComfyUI process from the same venv and folder — no
+second venv is needed. The chosen GPU is isolated per process via
+`CUDA_VISIBLE_DEVICES`, so each session sees its GPU as CUDA device 0.
+Launching with the same GPU or port as the other running session only logs a
+warning. Both sessions are stopped when the window is closed; each tab's state
+is saved under `sessions` in the config.
 
 Note: the Magik TtC API ports 8189–8198 are shared; if both sessions run the
-Magik TtC custom node, only one can bind them — use the per-session workflow
-panel (ComfyUI's own API on each session's port) instead.
+Magik TtC custom node, only one can bind them — use the per-tab workflow panel
+(ComfyUI's own API on each session's port) instead.
