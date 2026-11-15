@@ -75,9 +75,9 @@ tab and is fully independent per session:
   app window.
 
 Each tab is tinted with its own accent theme (`PANEL_THEMES` in `panel.py`:
-green for the first GPU tab, blue for the second — frame, section borders,
-section toggles, checked GPU radio and the Launch button), so the two panels
-are easy to tell apart at a glance. The second tab is hidden and disabled until
+dominant green for the first GPU tab, dominant orange for the second — frame,
+section borders, section toggles, checked GPU radio and the Launch button), so
+the two panels are easy to tell apart at a glance. The second tab is hidden and disabled until
 ComfyUI is launched or launching on the first tab (it stays visible while a
 session 2 process is running, so it can never become unreachable).
 

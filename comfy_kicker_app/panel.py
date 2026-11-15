@@ -5,12 +5,13 @@ from .monitor import WorkflowPanel
 from .session import ComfySession
 from .widgets import CollapsibleSection, FastRow, FlagRow, LogPane
 
-# One accent theme per GPU tab, so the two panels are easy to tell apart.
+# One accent theme per GPU tab, so the two panels are easy to tell apart:
+# dominant green for the first GPU tab, dominant orange for the second.
 PANEL_THEMES = [
-    {"accent": "#20a472", "accent_hover": "#2cc98f", "accent_pressed": "#116747",
-     "border": "#16845b", "bg": "rgba(32, 164, 114, 0.07)"},   # GPU tab 1: green
-    {"accent": "#5b8def", "accent_hover": "#7aa5f5", "accent_pressed": "#294361",
-     "border": "#3f6fd1", "bg": "rgba(91, 141, 239, 0.07)"},    # GPU tab 2: blue
+    {"accent": "#1fae6e", "accent_hover": "#27c983", "accent_pressed": "#0f7a4c",
+     "border": "#128a56", "bg": "rgba(31, 174, 110, 0.08)"},   # GPU tab 1: green
+    {"accent": "#e8862e", "accent_hover": "#f5a04a", "accent_pressed": "#b25f14",
+     "border": "#cd7220", "bg": "rgba(232, 134, 46, 0.08)"},   # GPU tab 2: orange
 ]
 
 
