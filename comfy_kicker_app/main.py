@@ -3,15 +3,36 @@ from .common import *
 from .ui import Kicker
 import tempfile
 
+def _exec_arg(path):
+    """Desktop Entry Exec argument: quote only when it contains whitespace
+    (some launchers mishandle always-quoted Exec)."""
+    s = str(path)
+    return f'"{s}"' if re.search(r"\s", s) else s
+
 def install_desktop():
     d = Path.home() / ".local/share/applications"
     d.mkdir(parents=True, exist_ok=True)
     f = d / "comfy-kicker.desktop"
     entrypoint = Path(__file__).resolve().parent.parent / "comfy_kicker.py"
-    f.write_text("[Desktop Entry]\nType=Application\nName=Comfy Kicker\nComment=ComfyUI launcher\n"
-                 f'Exec="{sys.executable}" "{entrypoint}"\n'
-                 "Icon=applications-graphics\nCategories=Graphics;Development;\nTerminal=false\n")
+    f.write_text("[Desktop Entry]\n"
+                 "Type=Application\n"
+                 "Name=Comfy Kicker\n"
+                 "Comment=ComfyUI launcher\n"
+                 f"Exec={_exec_arg(sys.executable)} {_exec_arg(entrypoint)}\n"
+                 f"Path={entrypoint.parent}\n"
+                 "Icon=applications-graphics\n"
+                 "Categories=Graphics;Development;\n"
+                 "Terminal=false\n"
+                 "StartupNotify=true\n")
+    # The executable bit marks the entry trusted, so KDE/GNOME actually launch it.
+    f.chmod(0o755)
     print(f"Wrote {f}")
+    udb = shutil.which("update-desktop-database")  # refresh the menu cache when available
+    if udb:
+        subprocess.run([udb, str(d)], check=False)
+    gio = shutil.which("gio")  # GNOME: explicit trust flag
+    if gio:
+        subprocess.run([gio, "set", str(f), "metadata::trusted", "true"], check=False)
 
 def claim_instance(app):
     """One launcher per user; later launches only activate its existing window."""
