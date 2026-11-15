@@ -31,6 +31,23 @@ works from the application menu right away.
 
 The package directory must remain alongside `comfy_kicker.py`.
 
+## Workflow ETA panel (timer widget)
+
+The floating timer widget is the **Workflow ETA Panel**, which lives together
+with the Workflow ETA ComfyUI extension in
+[IA-gyz/comfyui-workflow-ETA](https://github.com/IA-gyz/comfyui-workflow-ETA)
+under `Workflow_ETA_Panel/`. Each session tab's **Open Timer Widget** button
+launches it (or activates the running one) from, in order:
+
+1. the installed desktop entry `~/.local/share/applications/workflow-eta-panel.desktop`
+   (via `gio launch` / `kioclient exec`), then the installed script
+   `~/.local/share/workflow-eta-panel/workflow_eta_panel.py`;
+2. a local checkout of the repo at `~/Apps/comfyui-workflow-ETA` (override with
+   the `workflow_eta_repo` key in the session config), running
+   `Workflow_ETA_Panel/workflow_eta_panel.py` with Kicker's own interpreter.
+
+To install it properly: clone the repo and run `python3 Workflow_ETA_Panel/install.py`.
+
 ## Log filter behavior
 
 - No filter boxes checked: show every log line.
