@@ -12,6 +12,11 @@ Install/update the desktop launcher:
 python comfy_kicker.py --install-desktop
 ```
 
+This writes `~/.local/share/applications/comfy-kicker.desktop` with the
+correct `Exec`/`Path`, marks it executable (trusted on KDE/GNOME) and refreshes
+the desktop database / trust flags when the tools are available, so the entry
+works from the application menu right away.
+
 ## Modules
 
 - `comfy_kicker.py` — executable entry point.
