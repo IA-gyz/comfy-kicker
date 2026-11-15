@@ -45,6 +45,8 @@ FAVORITES = [
 HIDDEN = {"--quick-test-for-ci", "--windows-standalone-build", "--list-feature-flags", "--cuda-device"}
 
 ASSETS = Path(__file__).resolve().parent / "assets"
+# The floating Workflow ETA panel lives in this repo, under Workflow_ETA_Panel/.
+WORKFLOW_ETA_REPO = "https://github.com/IA-gyz/comfyui-workflow-ETA"
 # Product photos shown next to a GPU wherever its name is displayed (vendor or model match).
 GPU_IMAGES = [
     (re.compile(r"asus|rog|3090", re.I), "asus.png"),   # the RTX 3090 card

@@ -778,11 +778,21 @@ class SessionPanel(QWidget):
         elif script.is_file():
             command = [sys.executable, str(script)]
         else:
-            QMessageBox.information(self, "Open Timer Widget",
-                "Workflow ETA Panel is not installed.\n\n"
-                "Extract the Workflow ETA Panel package and run:\npython3 install.py\n\n"
-                f"Expected panel location:\n{script}")
-            return
+            # Not installed: fall back to a local checkout of the Workflow ETA
+            # repo — the panel lives in its Workflow_ETA_Panel/ folder.
+            repo = Path(self.cfg.get("workflow_eta_repo") or Path.home() / "Apps" / "comfyui-workflow-ETA")
+            checkout = repo / "Workflow_ETA_Panel" / "workflow_eta_panel.py"
+            if checkout.is_file():
+                command = [sys.executable, str(checkout)]
+            else:
+                QMessageBox.information(self, "Open Timer Widget",
+                    "Workflow ETA Panel is not installed.\n\n"
+                    f"Clone {WORKFLOW_ETA_REPO} and run:\n"
+                    "    python3 Workflow_ETA_Panel/install.py\n"
+                    "or keep a checkout at:\n"
+                    f"    {repo}\n\n"
+                    f"Installed location: {script}")
+                return
         try:
             subprocess.Popen(command, start_new_session=True,
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
