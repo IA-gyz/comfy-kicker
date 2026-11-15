@@ -78,7 +78,23 @@ class Kicker(QMainWindow):
         self.panels = [SessionPanel(self, 0), SessionPanel(self, 1)]
         for i, p in enumerate(self.panels):
             self.session_tabs.addTab(p, f"Session {i + 1}")
+        for p in self.panels:
+            p.s.stateChanged.connect(self._update_session2_tab)
+        self._update_session2_tab()
         v.addWidget(self.session_tabs, 1)
+
+    def _update_session2_tab(self):
+        """The second GPU tab is hidden/inaccessible until ComfyUI is launched
+        (or launching) on the first tab — unless session 2 itself is running,
+        so a running second session never becomes unreachable."""
+        p0, p1 = self.panels
+        visible = p0.s.running() or p1.s.running()
+        bar = self.session_tabs.tabBar()
+        bar.setTabEnabled(1, visible)
+        if hasattr(bar, "setTabVisible"):
+            bar.setTabVisible(1, visible)
+        if not visible and self.session_tabs.currentIndex() == 1:
+            self.session_tabs.setCurrentIndex(0)
 
     def _browse(self, edit):
         d = QFileDialog.getExistingDirectory(self, "Select folder", edit.text() or str(Path.home()))
