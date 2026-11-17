@@ -186,8 +186,8 @@ class FastRow(FlagRow):
 
 
 class CollapsibleSection(QFrame):
-    """A compact arrow at the top-left beside the section body."""
-    def __init__(self, title, body, expanded=True):
+    """A compact arrow at the top-left beside the section body; optional bin button clears it."""
+    def __init__(self, title, body, expanded=True, on_clear=None):
         super().__init__()
         self.body = body
         self.title = title
@@ -202,7 +202,21 @@ class CollapsibleSection(QFrame):
         self.toggle.setCheckable(True)
         self.toggle.setAccessibleName(f"Toggle {title}")
         self.toggle.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        layout.addWidget(self.toggle, 0, Qt.AlignmentFlag.AlignLeft)
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.addWidget(self.toggle, 0, Qt.AlignmentFlag.AlignLeft)
+        if on_clear is not None:
+            self.clear_btn = QToolButton()
+            self.clear_btn.setAutoRaise(True)
+            self.clear_btn.setIcon(QIcon.fromTheme("user-trash"))
+            if self.clear_btn.icon().isNull():
+                self.clear_btn.setText("\U0001f5d1")
+            self.clear_btn.setToolTip(f"Clear {title.lower()}")
+            self.clear_btn.setAccessibleName(f"Clear {title.lower()}")
+            self.clear_btn.clicked.connect(on_clear)
+            header.addWidget(self.clear_btn)
+        header.addStretch(1)
+        layout.addLayout(header)
         layout.addWidget(body, 1)
         self.toggle.toggled.connect(self._expand)
         self.toggle.setChecked(expanded)
@@ -342,6 +356,12 @@ class LogPane(QWidget):
         if self.auto_scroll:
             sb = self.view.verticalScrollBar()
             QTimer.singleShot(0, lambda: sb.setValue(sb.maximum()))  # after relayout, respect auto-scroll
+
+    def clear(self):
+        """Empty the log view and drop any half-received line state."""
+        self.view.clear()
+        self._cat, self._line, self._bol, self._in_tb = None, "", True, False
+        self._cr, self._esc = False, ""
 
     def scroll_to_end(self):
         self.view.moveCursor(QTextCursor.MoveOperation.End)
