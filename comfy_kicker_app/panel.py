@@ -122,7 +122,7 @@ class SessionPanel(QWidget):
         self.filter_all.toggled.connect(self._toggle_all_filters)
         fr.addStretch(1)
         lv.addLayout(fr)
-        self.log_section = CollapsibleSection("Log", logbox, self.cfg.get("log_expanded", True))
+        self.log_section = CollapsibleSection("Log", logbox, self.cfg.get("log_expanded", True), on_clear=self.logpane.clear)
         split.addWidget(self.log_section)
         split.setSizes([480, 440])
         v.addWidget(split, 1)
