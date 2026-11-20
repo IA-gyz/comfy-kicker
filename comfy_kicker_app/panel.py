@@ -120,7 +120,10 @@ class SessionPanel(QWidget):
             fr.addWidget(cb)
             self.filter_boxes.append((bit, cb))
         self.blink_cb = QCheckBox("blink")
-        self.blink_cb.setToolTip("Blink the generation speeds (it/s, s/it) in the log at 1 Hz")
+        self.blink_cb.setToolTip(
+            "Blink generation speeds (it/s, s/it) in the log at 1 Hz with alternating colours; "
+            "the last step (X/X) blinks in a distinct colour and ?it/s stays static"
+        )
         self.blink_cb.setAccessibleName("Blink generation speeds")
         self.blink_cb.toggled.connect(self.logpane.set_blink)
         fr.addWidget(self.blink_cb)

@@ -61,6 +61,8 @@ def gpu_image(name):
 
 # Generation speed as printed by tqdm, e.g. 1.19it/s or 0.84 s/it.
 RATE_RE = re.compile(r"\b(?:\d+(?:\.\d+)?\s*)?(?:it/s|s/it)\b", re.I)
+RATE_BLINK_RE = re.compile(r"(?<![0-9A-Za-z])(?:\d+(?:\.\d+)?|\?)?\s*(?:it/s|s/it)\b", re.I)
+LAST_STEP_RE = re.compile(r"\b(\d+)/(\d+)\b")
 
 # Log colouring: first matching rule wins per fragment; the most severe category (lowest rank) wins per line.
 LOG_RULES = [
