@@ -59,13 +59,16 @@ def gpu_image(name):
             return path if path.is_file() else None
     return None
 
+# Generation speed as printed by tqdm, e.g. 1.19it/s or 0.84 s/it.
+RATE_RE = re.compile(r"\b(?:\d+(?:\.\d+)?\s*)?(?:it/s|s/it)\b", re.I)
+
 # Log colouring: first matching rule wins per fragment; the most severe category (lowest rank) wins per line.
 LOG_RULES = [
     ("error", re.compile(r"error|critical|fatal|traceback|exception|failed|out of memory|exited \(code (?!0\))", re.I)),
     ("warn", re.compile(r"warn|deprecat", re.I)),
     ("success", re.compile(r"prompt executed in|to see the gui go to|starting server|loaded completely|exited \(code 0\)", re.I)),
     ("workflow_eta", re.compile(r"\[workflow-eta\]", re.I)),
-    ("rate", re.compile(r"\b(?:\d+(?:\.\d+)?\s*)?(?:it/s|s/it)\b", re.I)),
+    ("rate", RATE_RE),
     ("info", re.compile(r"got prompt|requested to load|loaded partially|loading \d+ new model|using .* attention|total vram", re.I)),
     ("progress", re.compile(r"\d+%\|")),
     ("debug", re.compile(r"\bDEBUG\b")),

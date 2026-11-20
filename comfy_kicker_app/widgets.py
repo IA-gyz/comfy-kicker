@@ -252,6 +252,11 @@ class LogPane(QWidget):
         self._gen_times = []  # generation run times for the summary line
         self.filter_mask, self.filter_classified_only = 0, False  # active bits; all boxes means classified-only mode
         self.auto_scroll = True
+        self.blink_enabled = False
+        self._blink_phase = True
+        self._blink_timer = QTimer(self)
+        self._blink_timer.setInterval(500)
+        self._blink_timer.timeout.connect(self._blink_tick)
 
     def log(self, text):
         """Append to the log; a bare \\r (tqdm progress) overwrites the current line."""
@@ -356,6 +361,49 @@ class LogPane(QWidget):
         if self.auto_scroll:
             sb = self.view.verticalScrollBar()
             QTimer.singleShot(0, lambda: sb.setValue(sb.maximum()))  # after relayout, respect auto-scroll
+
+    def set_blink(self, on):
+        """Enable/disable the 1 Hz blinking of generation speeds (it/s, s/it)."""
+        self.blink_enabled = bool(on)
+        self._blink_phase = True
+        if self.blink_enabled:
+            self._blink_timer.start()
+        else:
+            self._blink_timer.stop()
+        self._apply_blink()
+
+    def _blink_tick(self):
+        self._blink_phase = not self._blink_phase
+        self._apply_blink()
+
+    def _line_category(self, text):
+        for cat, rx in LOG_RULES:
+            if rx.search(text):
+                return cat
+        return None
+
+    def _apply_blink(self):
+        """Recolour every generation-speed token: hidden on the off phase, normal colour otherwise."""
+        hide = self.blink_enabled and not self._blink_phase
+        bg = self.view.palette().color(QPalette.ColorRole.Base)
+        doc = self.view.document()
+        blk = doc.begin()
+        while blk.isValid():
+            text = blk.text()
+            low = text.lower()
+            if "it/s" in low or "s/it" in low:
+                base = self._fmts.get(self._line_category(text), self._fmts[None])
+                cur = QTextCursor(blk)
+                for m in RATE_RE.finditer(text):
+                    cur.setPosition(blk.position() + m.start())
+                    cur.setPosition(blk.position() + m.end(), QTextCursor.MoveMode.KeepAnchor)
+                    if hide:
+                        f = QTextCharFormat(base)
+                        f.setForeground(bg)
+                        cur.setCharFormat(f)
+                    else:
+                        cur.setCharFormat(base)
+            blk = blk.next()
 
     def clear(self):
         """Empty the log view and drop any half-received line state."""
