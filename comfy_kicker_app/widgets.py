@@ -246,7 +246,7 @@ class LogPane(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self.view)
-        self._fmts = self._make_formats()
+        self._fmts, self._blink_fmts = self._make_formats()
         self._cat, self._line, self._bol, self._in_tb = None, "", True, False  # log colouring state
         self._cr, self._esc = False, ""  # carriage-return overwrite flag, partial ANSI escape code
         self._gen_times = []  # generation run times for the summary line
@@ -321,7 +321,13 @@ class LogPane(QWidget):
             if bold:
                 f.setFontWeight(QFont.Weight.Bold)
             fmts[cat] = f
-        return fmts
+        blink_spec = {"norm": ("#f5c04a", "#b9770e"), "last": ("#c792ea", "#8e44ad")}
+        bfmts = {}
+        for key, (d, l) in blink_spec.items():
+            f = QTextCharFormat()
+            f.setForeground(QColor(d if dark else l))
+            bfmts[key] = f
+        return fmts, bfmts
 
     def _classify(self, frag):
         """Colour category for a log fragment (None = default text)."""
@@ -383,9 +389,7 @@ class LogPane(QWidget):
         return None
 
     def _apply_blink(self):
-        """Recolour every generation-speed token: hidden on the off phase, normal colour otherwise."""
-        hide = self.blink_enabled and not self._blink_phase
-        bg = self.view.palette().color(QPalette.ColorRole.Base)
+        """Recolour every generation-speed token: alternating colours while blinking, static otherwise."""
         doc = self.view.document()
         blk = doc.begin()
         while blk.isValid():
@@ -393,16 +397,16 @@ class LogPane(QWidget):
             low = text.lower()
             if "it/s" in low or "s/it" in low:
                 base = self._fmts.get(self._line_category(text), self._fmts[None])
+                last = any(a == b and int(b) > 0 for a, b in LAST_STEP_RE.findall(text))
+                alt = self._blink_fmts["last" if last else "norm"]
                 cur = QTextCursor(blk)
-                for m in RATE_RE.finditer(text):
+                for m in RATE_BLINK_RE.finditer(text):
                     cur.setPosition(blk.position() + m.start())
                     cur.setPosition(blk.position() + m.end(), QTextCursor.MoveMode.KeepAnchor)
-                    if hide:
-                        f = QTextCharFormat(base)
-                        f.setForeground(bg)
-                        cur.setCharFormat(f)
-                    else:
+                    if "?" in m.group(0) or not self.blink_enabled:
                         cur.setCharFormat(base)
+                    else:
+                        cur.setCharFormat(alt if self._blink_phase else base)
             blk = blk.next()
 
     def clear(self):
