@@ -127,6 +127,27 @@ class SessionPanel(QWidget):
         self.blink_cb.setAccessibleName("Blink generation speeds")
         self.blink_cb.toggled.connect(self.logpane.set_blink)
         fr.addWidget(self.blink_cb)
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("Search log\u2026")
+        self.search_edit.setClearButtonEnabled(True)
+        self.search_edit.setMaximumWidth(180)
+        self.search_edit.setToolTip("Find in the log (Ctrl+F)\nEnter: next match")
+        self.search_edit.setAccessibleName("Search log")
+        self.search_edit.textChanged.connect(lambda t: self.logpane.find(t))
+        self.search_edit.returnPressed.connect(lambda: self.logpane.find(self.search_edit.text()))
+        fr.addWidget(self.search_edit)
+        self.search_prev = QToolButton()
+        self.search_prev.setText("\u2191")
+        self.search_prev.setToolTip("Previous match in the log")
+        self.search_prev.setAccessibleName("Previous log search match")
+        self.search_prev.clicked.connect(lambda: self.logpane.find(self.search_edit.text(), backward=True))
+        fr.addWidget(self.search_prev)
+        self.search_next = QToolButton()
+        self.search_next.setText("\u2193")
+        self.search_next.setToolTip("Next match in the log (Enter)")
+        self.search_next.setAccessibleName("Next log search match")
+        self.search_next.clicked.connect(lambda: self.logpane.find(self.search_edit.text()))
+        fr.addWidget(self.search_next)
         self.filter_all.toggled.connect(self._toggle_all_filters)
         fr.addStretch(1)
         lv.addLayout(fr)
@@ -271,6 +292,9 @@ class SessionPanel(QWidget):
         self.ttc.monitorStatus.connect(self.monitor_status.setText)
         bar.addWidget(self.monitor_status)
         v.addLayout(bar)
+        find_shortcut = QShortcut(QKeySequence.StandardKey.Find, self)
+        find_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        find_shortcut.activated.connect(self._focus_search)
         self._apply_theme()
 
     def _apply_theme(self):
@@ -761,6 +785,11 @@ class SessionPanel(QWidget):
     def scroll_log_to_end(self):
         if hasattr(self, "logpane"):
             self.logpane.scroll_to_end()
+
+    def _focus_search(self):
+        """Ctrl+F: focus the log search box with its text selected."""
+        self.search_edit.setFocus()
+        self.search_edit.selectAll()
 
     def open_log(self):
         log = Path(self.k.comfy_edit.text().strip()) / "user" / "comfyui.log"
