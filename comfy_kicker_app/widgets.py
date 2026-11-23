@@ -267,6 +267,7 @@ class LogPane(QWidget):
         extra = []  # summary lines to add once this chunk is fully written
         sb = self.view.verticalScrollBar()
         follow = self.auto_scroll  # explicit toggle controls whether new output moves the view
+        anchor = None if follow else self.view.firstVisibleBlock()  # first visible line: stays put when OFF
         cur = QTextCursor(self.view.document())  # private cursor: leaves the user's selection alone
         cur.movePosition(QTextCursor.MoveOperation.End)
         for tok in re.split(r"(\r\n|\r|\n)", text):
@@ -300,6 +301,15 @@ class LogPane(QWidget):
                 self._place(cur.block(), sum(bit for bit, _, rx in FILTER_RULES if rx.search(self._line) or (bit == 8 and self._cat in ("error", "tb"))))
         if follow:
             sb.setValue(sb.maximum())
+        elif anchor is not None and anchor.isValid():
+            # Re-anchor to the line that was first visible: the block cap trims lines from
+            # the top, which would otherwise shift the view on every new line.
+            n, b = 0, self.view.document().firstBlock()
+            while b.isValid() and b.blockNumber() < anchor.blockNumber():
+                if b.isVisible():
+                    n += 1
+                b = b.next()
+            sb.setValue(n)
         for line in extra:
             self.log(line)
 
