@@ -429,6 +429,22 @@ class LogPane(QWidget):
         self.view.moveCursor(QTextCursor.MoveOperation.End)
         self.view.verticalScrollBar().setValue(self.view.verticalScrollBar().maximum())
 
+    def find(self, text, backward=False):
+        """Select the next/previous occurrence of text, wrapping around; False when absent."""
+        if not text:
+            return False
+        flags = QTextDocument.FindFlag.FindBackward if backward else QTextDocument.FindFlag(0)
+        orig = self.view.textCursor()
+        if self.view.find(text, flags):
+            return True
+        cur = QTextCursor(orig)
+        cur.movePosition(QTextCursor.MoveOperation.End if backward else QTextCursor.MoveOperation.Start)
+        self.view.setTextCursor(cur)
+        if self.view.find(text, flags):
+            return True
+        self.view.setTextCursor(orig)  # no match anywhere: keep the previous selection
+        return False
+
     def _gen_summary(self, secs):
         self._gen_times.append(secs)
         n, avg = len(self._gen_times), sum(self._gen_times) / len(self._gen_times)

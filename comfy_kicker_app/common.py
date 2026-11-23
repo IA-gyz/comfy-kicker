@@ -21,7 +21,7 @@ from pathlib import Path
 from shiboken6 import isValid
 
 from PySide6.QtCore import QLockFile, QStandardPaths, QProcess, QProcessEnvironment, Qt, QTimer, QUrl, QUrlQuery, QSize, Signal
-from PySide6.QtGui import QActionGroup, QPainter, QPixmap, QIcon, QBrush, QColor, QDesktopServices, QFont, QPalette, QTextCharFormat, QTextCursor
+from PySide6.QtGui import QActionGroup, QKeySequence, QPainter, QPixmap, QIcon, QBrush, QColor, QDesktopServices, QFont, QPalette, QShortcut, QTextCharFormat, QTextCursor, QTextDocument
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtNetwork import QLocalServer, QLocalSocket, QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
